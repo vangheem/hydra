@@ -186,6 +186,16 @@ type HandledLoginRequest struct {
 	WasUsed         bool                `json:"-"`
 }
 
+// SessionRequest is the request payload used to create a new session.
+//
+// swagger:model acceptLoginRequest
+type SessionRequest struct {
+	ClientID string `json:"client_id"`
+	Subject string `json:"subject"`
+	Scope string `json:"scope"`
+}
+
+
 // Contains optional information about the OpenID Connect request.
 //
 // swagger:model openIDConnectContext

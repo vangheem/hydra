@@ -23,6 +23,11 @@ type InternalRegistry interface {
 }
 
 type Registry interface {
+	OAuth2Provider() fosite.OAuth2Provider
+	AudienceStrategy() fosite.AudienceMatchingStrategy
+
+	AccessTokenJWTStrategy() jwk.JWTStrategy
+
 	ConsentManager() Manager
 	ConsentStrategy() Strategy
 	SubjectIdentifierAlgorithm() map[string]SubjectIdentifierAlgorithm

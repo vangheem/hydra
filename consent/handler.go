@@ -25,6 +25,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+	"strings"
+	"context"
 
 	"github.com/ory/x/stringsx"
 
@@ -35,6 +37,11 @@ import (
 	"github.com/ory/hydra/x"
 	"github.com/ory/x/pagination"
 	"github.com/ory/x/urlx"
+	// "github.com/ory/hydra/client"
+	"github.com/ory/hydra/oauth2/types"
+
+	"github.com/ory/fosite/token/jwt"
+	"github.com/ory/fosite/handler/openid"
 )
 
 type Handler struct {
@@ -71,6 +78,7 @@ func (h *Handler) SetRoutes(admin *x.RouterAdmin) {
 	admin.DELETE(SessionsPath+"/login", h.DeleteLoginSession)
 	admin.GET(SessionsPath+"/consent", h.GetConsentSessions)
 	admin.DELETE(SessionsPath+"/consent", h.DeleteConsentSession)
+	admin.POST(SessionsPath, h.PostSession)
 
 	admin.GET(LogoutPath, h.GetLogoutRequest)
 	admin.PUT(LogoutPath+"/accept", h.AcceptLogoutRequest)
@@ -119,6 +127,157 @@ func (h *Handler) DeleteConsentSession(w http.ResponseWriter, r *http.Request, p
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) writeAuthorizeError(w http.ResponseWriter, r *http.Request, ar fosite.AuthorizeRequester, err error) {
+	if !ar.IsRedirectURIValid() {
+		h.forwardError(w, r, err)
+		return
+	}
+
+	h.r.OAuth2Provider().WriteAuthorizeError(w, ar, err)
+}
+
+func (h *Handler) forwardError(w http.ResponseWriter, r *http.Request, err error) {
+	rfErr := fosite.ErrorToRFC6749Error(err)
+	query := url.Values{"error": {rfErr.Name}, "error_description": {rfErr.Description}, "error_hint": {rfErr.Hint}}
+
+	if h.c.ShareOAuth2Debug() {
+		query.Add("error_debug", rfErr.Debug)
+	}
+
+	http.Redirect(w, r, urlx.CopyWithQuery(h.c.ErrorURL(), query).String(), http.StatusFound)
+}
+
+func CreateAuthorizeRequest(s x.FositeStorer, ctx context.Context, r *http.Request, sr SessionRequest) (fosite.AuthorizeRequester, error) {
+	request := &fosite.AuthorizeRequest{
+		ResponseTypes:        fosite.Arguments{},
+		HandledResponseTypes: fosite.Arguments{},
+		Request:              *fosite.NewRequest(),
+	}
+	request.Form = r.Form
+	client, err := s.GetClient(ctx, sr.ClientID)
+	if err != nil {
+		return request, errors.WithStack(fosite.ErrInvalidClient.WithHint("The requested OAuth 2.0 Client does not exist.").WithDebug(err.Error()))
+	}
+	request.Client = client
+	return request, nil
+}
+
+// swagger:route POST /oauth2/auth/sessions admin createSession
+//
+// Create sessions for a subject for a specific OAuth 2.0 Client
+//
+// This endpoint creates a session for a subject for a specific OAuth 2.0 Client and creates an OAuth Access Token.
+//
+//
+//     Consumes:
+//     - application/json
+//
+//     Produces:
+//     - application/json
+//
+//     Schemes: http, https
+//
+//     Responses:
+//       204: emptyResponse
+//       400: genericError
+//       404: genericError
+//       500: genericError
+func (h *Handler) PostSession(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	var sr SessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&sr); err != nil {
+		h.r.Writer().WriteError(w, r, errors.WithStack(err))
+		return
+	}
+
+	var ctx = r.Context()
+	var provider = h.r.OAuth2Provider()
+	var store = h.r.OAuth2Storage()
+	authorizeRequest, err := CreateAuthorizeRequest(store, ctx, r, sr)
+	if err != nil {
+		x.LogError(err, h.r.Logger())
+		h.writeAuthorizeError(w, r, authorizeRequest, err)
+		return
+	}
+
+	var scope string = "foobar"
+	authorizeRequest.GrantScope(scope)
+
+	// var c client.Client = client.Client{
+	// 	ClientID: "foobar",
+	// }
+	// var consentRequest ConsentRequest = ConsentRequest{
+	// 	Client:     &c,
+	// 	Challenge:  "foobar",
+	// 	WasHandled: true,
+	// }
+	// err = h.r.ConsentManager().CreateConsentRequest(ctx, &consentRequest)
+	// if err != nil {
+	// 	x.LogError(err, h.r.Logger())
+	// 	h.writeAuthorizeError(w, r, authorizeRequest, err)
+	// 	return
+	// }
+
+	var challenge string = "foobar-challenge"
+	authorizeRequest.SetID(challenge)
+
+	
+	openIDKeyID, err := h.r.OpenIDJWTStrategy().GetPublicKeyID(ctx)
+	if err != nil {
+		x.LogError(err, h.r.Logger())
+		h.writeAuthorizeError(w, r, authorizeRequest, err)
+		return
+	}
+	claims := &jwt.IDTokenClaims{
+		Subject:                             "foobar",
+		Issuer:                              strings.TrimRight(h.c.IssuerURL().String(), "/") + "/",
+		IssuedAt:                            time.Now().UTC(),
+		AuthTime:                            time.Now().UTC(),
+		RequestedAt:                         time.Now().UTC(),
+		// Extra:                               session.Session.IDToken,
+		// AuthenticationContextClassReference: session.ConsentRequest.ACR,
+
+		// We do not need to pass the audience because it's included directly by ORY Fosite
+		// Audience:    []string{authorizeRequest.GetClient().GetID()},
+
+		// This is set by the fosite strategy
+		// ExpiresAt:   time.Now().Add(h.IDTokenLifespan).UTC(),
+	}
+	claims.Add("sid", "foobar-session-id")
+
+	// var accessTokenKeyID string = ""
+	// if h.c.AccessTokenStrategy() == "jwt" {
+	// 	accessTokenKeyID, err :=h.r.AccessTokenJWTStrategy().GetPublicKeyID(r.Context())
+	// 	if err != nil {
+	// 		x.LogError(err, h.r.Logger())
+	// 		h.writeAuthorizeError(w, r, authorizeRequest, err)
+	// 		return
+	// 	}
+	// }
+
+	// done
+	response, err := provider.NewAuthorizeResponse(ctx, authorizeRequest, &types.Session{
+		DefaultSession: &openid.DefaultSession{
+			Claims: claims,
+			Headers: &jwt.Headers{Extra: map[string]interface{}{
+				// required for lookup on jwk endpoint
+				"kid": openIDKeyID,
+			}},
+			Subject: "foobar",
+		},
+		// Extra:            session.Session.AccessToken,
+		// KID:              accessTokenKeyID,
+		ClientID:         "foobar",
+		ConsentChallenge: challenge,
+	})
+	if err != nil {
+		x.LogError(err, h.r.Logger())
+		h.writeAuthorizeError(w, r, authorizeRequest, err)
+		return
+	}
+
+	provider.WriteAuthorizeResponse(w, authorizeRequest, response)
 }
 
 // swagger:route GET /oauth2/auth/sessions/consent admin listSubjectConsentSessions
