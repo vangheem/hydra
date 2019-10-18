@@ -9,6 +9,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/ory/hydra/metrics/prometheus"
+	"github.com/ory/hydra/tokens"
 	"github.com/ory/x/logrusx"
 	"github.com/ory/x/serverx"
 
@@ -63,6 +64,7 @@ type RegistryBase struct {
 	fop          fosite.OAuth2Provider
 	coh          *consent.Handler
 	oah          *oauth2.Handler
+	toh          *tokens.Handler
 	sia          map[string]consent.SubjectIdentifierAlgorithm
 	trc          *tracing.Tracer
 	pmm          *prometheus.MetricsManager
@@ -105,6 +107,7 @@ func (m *RegistryBase) RegisterRoutes(admin *x.RouterAdmin, public *x.RouterPubl
 	m.KeyHandler().SetRoutes(admin, public, m.OAuth2AwareMiddleware())
 	m.ClientHandler().SetRoutes(admin)
 	m.OAuth2Handler().SetRoutes(admin, public, m.OAuth2AwareMiddleware())
+	m.TokensHandler().SetRoutes(admin)
 }
 
 func (m *RegistryBase) BuildVersion() string {
@@ -364,6 +367,13 @@ func (m *RegistryBase) ConsentHandler() *consent.Handler {
 		m.coh = consent.NewHandler(m.r, m.c)
 	}
 	return m.coh
+}
+
+func (m *RegistryBase) TokensHandler() *tokens.Handler {
+	if m.toh == nil {
+		m.toh = tokens.NewHandler(m.r, m.c)
+	}
+	return m.toh
 }
 
 func (m *RegistryBase) OAuth2Handler() *oauth2.Handler {

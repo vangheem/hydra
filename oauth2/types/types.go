@@ -23,7 +23,7 @@ package types
 import (
 	"github.com/ory/fosite/handler/openid"
 )
- 
+
 type Session struct {
 	*openid.DefaultSession `json:"idToken"`
 	Extra                  map[string]interface{} `json:"extra"`
@@ -31,4 +31,3 @@ type Session struct {
 	ClientID               string
 	ConsentChallenge       string
 }
- 
